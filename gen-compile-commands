@@ -1,0 +1,100 @@
+#!/bin/bash
+
+printhelp() {
+    cat >&2 << EOF
+USAGE: $0 [compilation-output-source source-dir]
+
+Use this to convert the output of compilation for an eclipse project to the
+compile_commands.json used by clangd.
+Will output compile_commands.json's content to stdout
+compilation-output-source: text file containing the compilation output
+                           use "-" for stdin
+source-dir: working directory during compilation
+            (like .../project/Debug_FLASH)
+
+Both can be autodetected if you run $0 in the project root
+EOF
+}
+
+exithook() {
+    if [ -n "$tmpFile" ]; then
+        rm "$tmpFile"
+        unset tmpFile
+    fi
+}
+
+if [ "$1" = '-h' -o "$1" = '--help' ]; then
+    printhelp
+    exit 1
+fi
+
+if [ $# -eq 0 ]; then
+    autodetect=1
+    projName="$(basename "$PWD")"
+    ccout="../.metadata/.plugins/org.eclipse.cdt.ui/$projName.build.log"
+    if [ -r "$ccout" ]; then
+        echo Automatically selecting compilation output file: 1>&2
+        echo "'$ccout'" 1>&2
+    else
+        echo Could not find compilation output file automatically
+        printhelp
+        exit 1
+    fi
+    # get word after 'hh:mm:ss **** (incremental)? Build of configuration'... at start of build log
+    ccdir="$(head -n 1 "$ccout" | sed 's/.*configuration //' | cut -d ' ' -f 1)"
+    echo Automatically selecting compilation directory: 1>&2
+    echo "'$ccdir'" 1>&2
+else
+    ccout="$1"
+    ccdir="$2"
+fi
+
+# if path for windows, try to convert it
+if [ ! -d "$ccdir" ]; then
+    ccdir="$(wslpath -u "$ccdir")"
+fi
+
+if [ ! -d "$ccdir" ]; then
+    echo "dir '$ccdir' not found. Aborting" 1>&2
+    exit 2
+fi
+ccdir="$(realpath "$ccdir")"
+
+# drop trailing '/' if present
+if [[ "$ccdir" == */ ]]; then
+    len=${#ccdir}
+    ccdir="${ccdir:0:$len}"
+fi
+
+trap exithook TERM INT
+
+toolchain='/mnt/c/NXP/S32Ds.3.5/S32DS/build_tools/gcc_v10.2/gcc-10.2-arm32-eabi/bin'
+tmpFile="$(mktemp --tmpdir compile-commands.XXXXX)"
+
+# generate file with only compile commands, one per line, @* arguments expanded
+if [ "$ccout" = '-' ]; then
+    env -C "$ccdir" gen-compile-commands.awk > "$tmpFile"
+else
+    env -C "$ccdir" gen-compile-commands.awk "$(realpath "$ccout")" > "$tmpFile"
+fi
+
+# prepend abs. path to compiler call
+# (note: sed accepts any char as cmd separator!)
+#sed -i -Ee "s;^;$toolchain/;" "$tmpFile"
+
+# remove quotes from C/C++ source files (assuming no spaces in the path)
+sed -i -Ee "s/ (['\"]?)([^ ]+\.c(c|pp)?)\1/ \2/g" "$tmpFile"
+
+# builds json output
+json="$(jq -R '[inputs| {directory: "'"$ccdir"'", command: ., file: match(" [^ ]+\\.c(c|pp)?").string[1:]} ]' \
+    "$tmpFile" \
+)"
+
+if [ -n "$autodetect" ]; then
+    echo "Automatically saving result in 'compile_commands.json'" 1>&2
+    echo "$json" > compile_commands.json
+else
+    echo "$json"
+fi
+
+exithook

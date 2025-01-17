@@ -1,0 +1,124 @@
+#!/bin/sh
+
+usage() {
+    cat << EOF
+USAGE: eclipsecc [-rc] [-w workspace-dir -p project-name]
+-h print this help
+-w workspace-dir: eclipse's workspace directory.
+   default: parent dir (..)
+-p project-name: eclipses's project name
+   default: current dir's name
+-k 1|3 compile with K1 eclipse / K3 eclipse (default: autodetect)
+-t make a custom target
+   Useful if the eclipse project is not using the "standard"
+   Debug_FLASH/Release_FLASH configuration names
+-r perform a release build
+   same as -t Release_FLASH
+-c perform a clean build
+   like make clean && make
+-f attempt to run even if eclipse is running
+EOF
+}
+
+# default cli options
+options='-nosplash -application org.eclipse.cdt.managedbuilder.core.headlessbuild --launcher.suppressErrors'
+
+# EXEs
+eclipsecK1='/mnt/c/NXP/S32DS_ARM_v2.2/eclipse/eclipsec.exe'
+eclipsecK3='/mnt/c/NXP/S32DS.3.5/eclipse/eclipsec.exe'
+tasklist='/mnt/c/Windows/System32/tasklist.exe'
+
+echo ECLIPSE CLI COMPILER
+echo
+
+if [ "$1" = '--help' ]; then
+    usage
+    exit 1
+fi
+
+while getopts hw:p:k:t:rcf opt; do
+    case "$opt" in
+        \:) echo "required argument not found for '$OPTARG'"
+            usage
+            exit 1
+            ;;
+        \?) usage
+            exit 1
+            ;;
+        h) usage
+           exit
+           ;;
+        w) workspace="$OPTARG";;
+        k) core="$OPTARG";;
+        p) project="$OPTARG";;
+        t) configuration="$OPTARG";;
+        r) configuration="Release_FLASH";;
+        c) clean="$opt";;
+        f) force="$opt";;
+    esac
+done
+
+if [ -z "$workspace" -a -n "$project" ] || [ -n "$workspace" -a -z "$project" ]; then
+    echo 'you need to specify both workspace or project (or neither)'
+    exit 1
+fi
+
+workspace="${workspace:-..}"
+project="${project:-$(basename "$PWD")}"
+
+# default eclipse configuration if no other has been specified
+configuration="${configuration:-Debug_FLASH}"
+
+if [ -n "$clean" ]; then
+    action="cleanBuild"
+else
+    action="build"
+fi
+
+if [ -z "$core" ]; then
+    if echo "$project" | grep -q BCU; then
+        core=1
+    else
+        core=3
+    fi
+    echo automatically using compiler for K$core
+fi
+
+if [ "$core" = '1' ]; then
+    eclipsec="$eclipsecK1"
+elif [ "$core" = '3' ]; then
+    eclipsec="$eclipsecK3"
+else
+    echo "invalid option for k: $core"
+    echo valid options are 1 or 3
+    exit 1
+fi
+ini="$(wslpath -w "$(dirname "$eclipsec")")\\s32ds.ini"
+
+echo "eclipse workspace directory: '$workspace'"
+echo "eclipse project: '$project'"
+echo "action: '$action'"
+if [ ! -f "$workspace/$project/.cproject" ]; then
+    echo "project '$workspace/$project' not found!"
+    echo 'use -h to show help'
+    exit 1
+fi
+
+if echo "$core$project" | grep -Eq '^(3.*BCU|1.*(MCU|M7))'; then
+    echo
+    echo "WARNING: project '$project' may be incompatible with K$core compiler"
+    echo
+fi
+
+if [ -z "$force" ] &&
+   [ "$("$tasklist" -fi 'IMAGENAME eq s32ds.exe' | wc -l)" -gt 1 ]; then
+    echo 'S32DS is running. Aborting (use -f to override)'
+    exit 1
+fi
+
+set -x
+"$eclipsec" $options \
+    -data "$workspace" \
+    -import "$workspace/$project" \
+    "-$action" "$project/$configuration" \
+    --launcher.ini "$ini" 2> /dev/null
