@@ -1,0 +1,112 @@
+#!/bin/sh
+
+# launches PEmicro's GDB server automatically with correct parameters:
+# detect where the cyclone is attached to and start PEmicro's gdbserver there
+
+serverport=7244
+# devices
+k1_dev='NXP_S32K1xx_S32K148F2M0M11'
+k3_dev='NXP_S32K3xx_S32K324'
+# k1 evaluation board
+k1eb_dev="$k1dev"
+
+pemicroConfIni="../.metadata/.plugins/com.pemicro.debug.gdbjtag.pne/config.ini"
+
+usage() {
+    cat << EOF
+USAGE: autopegdbserver (options..)
+option list:
+-h: print this help
+-d dev: manually select device (k1, k3, k1eb)
+-c core: select core
+-p port: manually select programming/debug interface port
+-s single session: quit once all debuggers disconnect
+EOF
+}
+
+while getopts hd:c:p:s opt; do
+    case "$opt" in
+        \:) echo "required argument not found for '$OPTARG'"
+            usage
+            exit 1
+            ;;
+        \?|h) usage
+            exit 1
+            ;;
+        d) dev="$OPTARG" ;;
+        c) core="$OPTARG" ;;
+        p) progport="$OPTARG";;
+        s) session="-singlesession";;
+        *) echo error: getopts switch misses handler for "'$opt'"
+           exit 2
+           ;;
+    esac
+done
+
+allprogport="$(pegdbserver -showhardware | grep -- '-PORT' | grep -Fv '[DUPLICATE]')"
+if [ -z "$progport" ]; then
+    # autodetect programming interface
+    if [ "$(echo "$allprogport" | wc -l)" -gt 1 ]; then
+        echo Programming port autoselection failed: multiple options available!
+        echo Select one manually and pass it via the -p option:
+        echo "$allprogport" | grep --color=auto -- -PORT
+        exit 0
+    else
+        progport="$(echo "$allprogport" | tr -s ' ' | grep -- -PORT="$progport" | cut -d ';' -f 1)"
+    fi
+else
+    progport="$(echo "$allprogport" | tr -s ' ' | grep -- -PORT="$progport" | cut -d ';' -f 1)"
+fi
+
+if [ -z "$progport" ]; then
+    echo ERROR: no programming port interface found! 1>&2
+    exit 1
+fi
+
+if [ -z "$dev" ]; then
+    # automatically choose device based on current path
+    if realpath . | grep -q BCU; then
+        dev="$k1_dev"
+    elif realpath . | grep -q MCU; then
+        dev="$k3_dev"
+    else
+        echo Device type autodetection failed! 1>&2
+        echo Select one manually with -d 1>&2
+        echo Aborting 1>&2
+        exit 1
+    fi
+else
+    dev="$(eval echo "\$${dev}_dev")"
+    if [ -z "$dev" ]; then
+        echo Device unsupported by this script. Aborting 1>&2
+        exit 1
+    fi
+fi
+
+core="${core:-0}"
+gdbport="$(($serverport + $core))"
+
+# needed because pegdbserver can get unresponsive even to ^C on K3
+killServer() {
+    if [ -n "$serverPid" ]; then
+        kill "$serverPid"
+    fi
+    exit $?
+}
+
+set -x
+pegdbserver \
+    -device="$dev" \
+    -corenum="$core" \
+    -startserver \
+    -serverport="$gdbport" \
+    $progport \
+    -speed=5000 \
+    $session \
+    $confOpt &
+set +x
+
+serverPid=$!
+trap killServer INT QUIT TERM
+
+wait
