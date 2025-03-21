@@ -17,6 +17,7 @@ usage() {
 USAGE: autopegdbserver (options..)
 option list:
 -h: print this help
+-a: attach to target (i.e. don't reset MCU when connecting)
 -d dev: manually select device (k1, k3, k1eb)
 -c core: select core
 -p port: manually select programming/debug interface port
@@ -24,7 +25,7 @@ option list:
 EOF
 }
 
-while getopts hd:c:p:s opt; do
+while getopts had:c:p:s opt; do
     case "$opt" in
         \:) echo "required argument not found for '$OPTARG'"
             usage
@@ -33,6 +34,7 @@ while getopts hd:c:p:s opt; do
         \?|h) usage
             exit 1
             ;;
+        a) attach="-attachonly";;
         d) dev="$OPTARG" ;;
         c) core="$OPTARG" ;;
         p) progport="$OPTARG";;
@@ -103,6 +105,7 @@ pegdbserver \
     $progport \
     -speed=5000 \
     $session \
+    $attach \
     $confOpt &
 set +x
 
