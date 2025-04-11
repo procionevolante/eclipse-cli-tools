@@ -1,0 +1,79 @@
+#!/bin/sh
+
+usage() {
+    cat << EOF
+gdbflash uses gdb to flash one or more binary onto a microcontroller.
+USAGE: gdbflash [-h] [-v|-f file...]
+-h print this help
+-v verbose mode
+-g start gdb server before flashing
+-f flash mode (default)
+-c verify (check) flash mode
+file: file(s) to flash
+
+Note that this program requires a running instance of gdbserver.
+EOF
+}
+
+while getopts 'hvsfc' opt; do
+    case "$opt" in
+        \:|\?)
+            usage
+            exit 1
+            ;;
+        v)  verbose=1 ;;
+        g)  gdbserver=1 ;;
+        h)  usage
+            exit
+            ;;
+        f)  mode='flash';;
+        c)  mode='verify';;
+    esac
+done
+# default mode is flash
+mode="${mode:-flash}"
+
+# shift so that $@ only contains filenames
+shift $(($OPTIND -1))
+
+# generate temporary gdb init file
+tmpinit="$(mktemp -t gdbflash.XXXXXX -p '')"
+cat > "$tmpinit" << EOF
+set pagination off
+target remote localhost:7244
+monitor selectcore 0
+EOF
+
+[ "$mode" = 'flash' ] && echo monitor startmultiload >> "$tmpinit"
+
+for fw in "$@"; do
+    if [ ! -r "$fw" ]; then
+        echo "can't find firmware file '$fw'" 1>&2
+        continue
+    fi
+    if [ "$mode" = 'flash' ]; then
+        echo "load '$fw'" >> "$tmpinit"
+    else
+        echo "monitor verify '$(wslpath -am "$fw")'" >> "$tmpinit"
+    fi
+    gdbfw="$fw"
+done
+
+[ "$mode" = 'flash' ] && cat >> "$tmpinit" << EOF
+monitor endmultiload
+monitor reset
+EOF
+
+cat >> "$tmpinit" << EOF
+detach
+shell sh -c "sleep 5 && rm '$tmpinit' &"
+EOF
+
+if [ -n "$gdbserver" ]; then
+    if [ -z "$verbose" ]; then
+        redir='>/dev/null'
+    fi
+    eval "autopegdbserver -s $redir &"
+fi
+
+exec gdb-multiarch -n --batch -x "$tmpinit" -e "$gdbfw"

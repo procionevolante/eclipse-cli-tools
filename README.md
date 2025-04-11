@@ -42,6 +42,11 @@ Note that for this to work you need `pegdbserver` available on your PATH.
 This binary is automatically installed during S32DS's installation with the name
 `pegdbserver_console`.
 
+gdbflash
+--------
+
+Flash an MCU using gdb and `autopegdbserver`.
+
 <!--
 vim: textwidth=80
 --!>
